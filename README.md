@@ -1,44 +1,18 @@
 # Conduit Ledger
 
-A double-entry accounting ledger API. See [docs/problem.md](docs/problem.md) for the full specification.
-
-## Features
-
-- **Double-entry accounting**: Every transaction must balance (total debits = total credits)
-- **Account directions**: Accounts can be either "debit" or "credit" type
-- **Balance protection**: Transactions that would cause negative balances are rejected
-- **Duplicate ID protection**: Returns 409 Conflict for duplicate account/transaction IDs
+A double-entry accounting ledger API.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 npm install
-
-# Run the server (default port 5000)
-npm start
-
-# Run in development mode (auto-reload)
-npm run dev
-
-# Run tests
-npm test
+npm start        # Run server on port 5000
+npm test         # Run tests
 ```
 
-## API Endpoints
+## API
 
 ### POST /accounts
-
-Create a new account.
-
-| Field     | Type   | Required | Description                          |
-|-----------|--------|----------|--------------------------------------|
-| id        | uuid   | No       | Auto-generated if not provided       |
-| name      | string | No       | Optional label                       |
-| direction | string | Yes      | Must be "debit" or "credit"          |
-| balance   | number | No       | Initial balance in USD (default: 0)  |
-
-**Example:**
 
 ```bash
 curl -X POST http://localhost:5000/accounts \
@@ -46,130 +20,82 @@ curl -X POST http://localhost:5000/accounts \
   -d '{"name": "Cash", "direction": "debit", "balance": 1000}'
 ```
 
-**Response (201):**
-
-```json
-{
-  "id": "71cde2aa-b9bc-496a-a6f1-34964d05e6fd",
-  "name": "Cash",
-  "direction": "debit",
-  "balance": 1000
-}
-```
-
 ### GET /accounts/:id
 
-Retrieve an account by ID.
-
 ```bash
-curl http://localhost:5000/accounts/71cde2aa-b9bc-496a-a6f1-34964d05e6fd
+curl http://localhost:5000/accounts/{id}
 ```
 
 ### POST /transactions
-
-Create a new transaction with balanced entries.
-
-| Field   | Type   | Required | Description                    |
-|---------|--------|----------|--------------------------------|
-| id      | uuid   | No       | Auto-generated if not provided |
-| name    | string | No       | Optional label                 |
-| entries | array  | Yes      | Array of entry objects         |
-
-Each entry:
-
-| Field      | Type   | Required | Description                 |
-|------------|--------|----------|-----------------------------|
-| id         | uuid   | No       | Auto-generated if not provided |
-| account_id | uuid   | Yes      | Reference to an account     |
-| direction  | string | Yes      | Must be "debit" or "credit" |
-| amount     | number | Yes      | Positive amount in USD      |
-
-**Example:**
 
 ```bash
 curl -X POST http://localhost:5000/transactions \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Office supplies",
     "entries": [
-      {"account_id": "cash-uuid", "direction": "credit", "amount": 100},
-      {"account_id": "expenses-uuid", "direction": "debit", "amount": 100}
+      {"account_id": "{debit-account-id}", "direction": "debit", "amount": 100},
+      {"account_id": "{credit-account-id}", "direction": "credit", "amount": 100}
     ]
   }'
 ```
 
-## Business Rules
+## Design
 
-### Transaction Balancing
+**Repository Pattern** — Data access abstracted behind interfaces for easy database swap.
 
-Every transaction must balance: total debit amounts must equal total credit amounts.
+**Service Layer** — Business logic isolated from HTTP concerns.
 
-### Balance Calculation
+**Integer Storage** — Amounts stored as cents internally to avoid floating-point errors.
 
-When an entry is applied to an account:
-- **Same direction** (account & entry): Balance **increases**
-- **Different direction**: Balance **decreases**
+### Production-Ready Patterns
 
-| Account Direction | Entry Direction | Effect on Balance |
-|-------------------|-----------------|-------------------|
-| debit             | debit           | +amount           |
-| debit             | credit          | -amount           |
-| credit            | debit           | -amount           |
-| credit            | credit          | +amount           |
+These patterns aren't strictly necessary for single-threaded Node.js with in-memory storage, but demonstrate production readiness:
 
-### Negative Balance Protection
+**Optimistic Locking** — Version-based concurrency control prevents lost updates when backed by a real database with concurrent access.
 
-Transactions that would cause any account balance to go negative are rejected with a 400 error.
+**Idempotency** — `Idempotency-Key` header prevents duplicate transaction processing across distributed instances or network retries.
 
-## Architecture
-
-```
-src/
-├── models/          # Data types and factory functions
-├── repositories/    # Data access layer (in-memory)
-├── services/        # Business logic
-├── controllers/     # HTTP handlers
-├── schemas/         # Zod validation schemas
-├── errors/          # Custom error classes
-├── utils/           # Helper functions (money conversion)
-└── app.ts           # Hono app setup
-```
-
-### Key Design Decisions
-
-1. **Repository Pattern**: Data access is abstracted behind interfaces, making it easy to swap in-memory storage for a real database.
-
-2. **Service Layer**: Business logic is isolated in services, making it testable without HTTP concerns.
-
-3. **Cents for Storage**: Amounts are stored as integers (cents) internally to avoid floating-point precision issues, converted to/from dollars at the API boundary.
-
-4. **Dependency Injection**: Services receive repositories via constructor, enabling easy mocking for tests.
-
-## Testing
-
-```bash
-# Run all tests
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-```
-
-## Design Note: Multi-Currency
-
-This ledger is USD-only as specified. Multi-currency would require:
-
-- **Currency per account** — a ledger only balances within one currency
-- **FX as a separate operation** — conversions link two single-currency transactions via a quote/rate
-- **Currency-aware precision** — USD uses 2 decimals, but USDC uses 6, BTC uses 8, JPY uses 0
+**Audit Trail** — Immutable balance history enables point-in-time reconstruction for compliance and debugging.
 
 ## Production Considerations
 
-For a production deployment, consider:
+### Balance Locking and Holds
 
-- **Database**: Replace in-memory storage with a persistent database
-- **Idempotency**: Add request idempotency for safe transaction retries
-- **Audit Logging**: Record all balance changes with timestamps
-- **Authentication**: Add user authentication and authorization
-- **Rate Limiting**: Protect against abuse
-- **Monitoring**: Add metrics and health checks
+Real payment systems must handle funds that are committed but not yet finalized:
+
+- **Blockchain**: Funds in mempool are "pending" until confirmed (may revert)
+- **Fiat rails**: ACH/wire transfers have multi-day settlement with potential failures
+- **Auth holds**: Credit card pre-auth reserves funds before capture
+
+A production ledger would track `pending_balance` separately from `available_balance`, with a state machine for holds (pending → captured/released/expired).
+
+### Horizontal Scaling
+
+For horizontal scaling, the in-memory stores would be replaced with:
+
+| Component | Purpose |
+|-----------|---------|
+| PostgreSQL | Primary data store with optimistic locking via version column |
+| Redis | Balance cache + distributed idempotency keys |
+| Message Queue | Async processing for webhooks, analytics, compliance |
+
+**Sharding**: Partition by `account_id` hash. Cross-shard transactions require 2PC or saga pattern.
+
+```
+        ┌──────────────┐
+        │ Load Balancer│
+        └───────┬──────┘
+       ┌────────┼────────┐
+       ▼        ▼        ▼
+   ┌───────┐┌───────┐┌───────┐
+   │ App 1 ││ App 2 ││ App N │
+   └───┬───┘└───┬───┘└───┬───┘
+       └────────┼────────┘
+       ┌────────┼────────┐
+       ▼        ▼        ▼
+   ┌───────┐┌───────┐┌───────┐
+   │ Redis ││  PG   ││ Queue │
+   └───────┘└───────┘└───────┘
+```
+
+The patterns implemented here (optimistic locking, idempotency, immutable audit log) form the foundation for this architecture.
