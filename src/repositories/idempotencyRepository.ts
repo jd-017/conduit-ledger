@@ -18,8 +18,6 @@ export interface IIdempotencyRepository {
   clear(): Promise<void>;  // For testing
 }
 
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
 /**
  * In-memory implementation of IIdempotencyRepository.
  * Stores idempotency records in a Map for O(1) lookups.

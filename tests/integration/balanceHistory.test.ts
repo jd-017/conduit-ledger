@@ -194,7 +194,6 @@ describe('Balance History', () => {
         balance: 1000,
       });
       expect(createRes.status).toBe(201);
-      const created = await createRes.json();
 
       await request('POST', '/accounts', {
         id: UUID2,
